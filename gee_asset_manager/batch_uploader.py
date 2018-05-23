@@ -61,7 +61,7 @@ def upload(user, source_path, destination_path, metadata_path=None, multipart_up
     """
     submitted_tasks_id = {}
 
-    __verify_path_for_upload(destination_path)
+    verify_path_for_upload(destination_path)
 
     path = os.path.join(os.path.expanduser(source_path), '*.tif')
     all_images_paths = glob.glob(path)
@@ -74,13 +74,14 @@ def upload(user, source_path, destination_path, metadata_path=None, multipart_up
 
     if user is not None:
         password = getpass.getpass()
-        google_session = __get_google_auth_session(user, password)
+        google_session = get_google_auth_session(user, password)
     else:
         storage_client = storage.Client()
 
-    __create_image_collection(destination_path)
+    create_image_collection(destination_path)
 
-    images_for_upload_path = __find_remaining_assets_for_upload(all_images_paths, destination_path)
+    images_for_upload_path = find_remaining_assets_for_upload(
+        all_images_paths, destination_path)
     no_images = len(images_for_upload_path)
 
     if no_images == 0:
@@ -90,13 +91,15 @@ def upload(user, source_path, destination_path, metadata_path=None, multipart_up
     failed_asset_writer = FailedAssetsWriter()
 
     for current_image_no, image_path in enumerate(images_for_upload_path):
-        logging.info('Processing image %d out of %d: %s', current_image_no+1, no_images, image_path)
-        filename = __get_filename_from_path(path=image_path)
+        logging.info('Processing image %d out of %d: %s',
+                     current_image_no + 1, no_images, image_path)
+        filename = get_filename_from_path(path=image_path)
 
         asset_full_path = destination_path + '/' + filename
 
         if metadata and not filename in metadata:
-            logging.warning("No metadata exists for image %s: it will not be ingested", filename)
+            logging.warning(
+                "No metadata exists for image %s: it will not be ingested", filename)
             failed_asset_writer.writerow([filename, 0, 'Missing metadata'])
             continue
 
@@ -104,42 +107,47 @@ def upload(user, source_path, destination_path, metadata_path=None, multipart_up
 
         try:
             if user is not None:
-                gsid = __upload_file_gee(session=google_session,
-                                                  file_path=image_path,
-                                                  use_multipart=multipart_upload)
+                gsid = upload_file_gee(session=google_session,
+                                       file_path=image_path,
+                                       use_multipart=multipart_upload)
             else:
-                gsid = __upload_file_gcs(storage_client, bucket_name, image_path)
+                gsid = upload_file_gcs(storage_client, bucket_name, image_path)
 
-            asset_request = __create_asset_request(asset_full_path, gsid, properties, nodata_value, band_names)
+            asset_request = create_asset_request(
+                asset_full_path, gsid, properties, nodata_value, band_names)
 
-            task_id = __start_ingestion_task(asset_request)
+            task_id = start_ingestion_task(asset_request)
             submitted_tasks_id[task_id] = filename
-            __periodic_check(current_image=current_image_no, period=20, tasks=submitted_tasks_id, writer=failed_asset_writer)
+            periodic_check(current_image=current_image_no, period=20,
+                           tasks=submitted_tasks_id, writer=failed_asset_writer)
         except Exception as e:
             logging.exception('Upload of %s has failed.', filename)
             failed_asset_writer.writerow([filename, 0, str(e)])
 
-    __check_for_failed_tasks_and_report(tasks=submitted_tasks_id, writer=failed_asset_writer)
+    check_for_failed_tasks_and_report(
+        tasks=submitted_tasks_id, writer=failed_asset_writer)
     failed_asset_writer.close()
 
-def __create_asset_request(asset_full_path, gsid, properties, nodata_value, band_names):
+
+def create_asset_request(asset_full_path, gsid, properties, nodata_value, band_names):
     if band_names:
         band_names = [{'id': name} for name in band_names]
 
     return {"id": asset_full_path,
-        "tilesets": [
-            {"sources": [
-                {"primaryPath": gsid,
-                 "additionalPaths": []
-                 }
-            ]}
-        ],
-        "bands": band_names,
-        "properties": properties,
-        "missingData": {"value": nodata_value}
-    }
+            "tilesets": [
+                {"sources": [
+                    {"primaryPath": gsid,
+                     "additionalPaths": []
+                     }
+                ]}
+            ],
+            "bands": band_names,
+            "properties": properties,
+            "missingData": {"value": nodata_value}
+            }
 
-def __verify_path_for_upload(path):
+
+def verify_path_for_upload(path):
     folder = path[:path.rfind('/')]
     response = ee.data.getInfo(folder)
     if not response:
@@ -148,19 +156,21 @@ def __verify_path_for_upload(path):
         sys.exit(1)
 
 
-def __find_remaining_assets_for_upload(path_to_local_assets, path_remote):
-    local_assets = [__get_filename_from_path(path) for path in path_to_local_assets]
-    if __collection_exist(path_remote):
-        remote_assets = __get_asset_names_from_collection(path_remote)
+def find_remaining_assets_for_upload(path_to_local_assets, path_remote):
+    local_assets = [get_filename_from_path(path) for path in path_to_local_assets]
+    if collection_exist(path_remote):
+        remote_assets = get_asset_names_from_collection(path_remote)
         if len(remote_assets) > 0:
             assets_left_for_upload = set(local_assets) - set(remote_assets)
             if len(assets_left_for_upload) == 0:
-                logging.warning('Collection already exists and contains all assets provided for upload. Exiting ...')
+                logging.warning(
+                    'Collection already exists and contains all assets provided for upload. Exiting ...')
                 sys.exit(1)
 
-            logging.info('Collection already exists. %d assets left for upload to %s.', len(assets_left_for_upload), path_remote)
+            logging.info('Collection already exists. %d assets left for upload to %s.', len(
+                assets_left_for_upload), path_remote)
             assets_left_for_upload_full_path = [path for path in path_to_local_assets
-                                                if __get_filename_from_path(path) in assets_left_for_upload]
+                                                if get_filename_from_path(path) in assets_left_for_upload]
             return assets_left_for_upload_full_path
 
     return path_to_local_assets
@@ -171,13 +181,13 @@ def retry_if_ee_error(exception):
 
 
 @retrying.retry(retry_on_exception=retry_if_ee_error, wait_exponential_multiplier=1000, wait_exponential_max=4000, stop_max_attempt_number=3)
-def __start_ingestion_task(asset_request):
+def start_ingestion_task(asset_request):
     task_id = ee.data.newTaskId(1)[0]
     _ = ee.data.startIngestion(task_id, asset_request)
     return task_id
 
 
-def __validate_metadata(path_for_upload, metadata_path):
+def validate_metadata(path_for_upload, metadata_path):
     validation_result = validate_metadata_from_csv(metadata_path)
     keys_in_metadata = {result.keys for result in validation_result}
     images_paths = glob.glob(os.path.join(path_for_upload, '*.tif*'))
@@ -185,7 +195,8 @@ def __validate_metadata(path_for_upload, metadata_path):
     missing_keys = keys_in_data - keys_in_metadata
 
     if missing_keys:
-        logging.warning('%d images does not have a corresponding key in metadata', len(missing_keys))
+        logging.warning(
+            '%d images does not have a corresponding key in metadata', len(missing_keys))
         print('\n'.join(e for e in missing_keys))
     else:
         logging.info('All images have metadata available')
@@ -198,7 +209,7 @@ def __validate_metadata(path_for_upload, metadata_path):
             exit(1)
 
 
-def __extract_metadata_for_image(filename, metadata):
+def extract_metadata_for_image(filename, metadata):
     if filename in metadata:
         return metadata[filename]
     else:
@@ -206,14 +217,15 @@ def __extract_metadata_for_image(filename, metadata):
         return None
 
 
-def __get_google_auth_session(username, password):
+def get_google_auth_session(username, password):
     google_accounts_url = 'https://accounts.google.com'
     authentication_url = 'https://accounts.google.com/ServiceLoginAuth'
 
     session = requests.session()
 
     login_html = session.get(google_accounts_url)
-    soup_login = BeautifulSoup(login_html.content, 'html.parser').find('form').find_all('input')
+    soup_login = BeautifulSoup(login_html.content, 'html.parser').find(
+        'form').find_all('input')
     payload = {}
     for u in soup_login:
         if u.has_attr('value'):
@@ -231,7 +243,7 @@ def __get_google_auth_session(username, password):
     return session
 
 
-def __get_upload_url(session):
+def get_upload_url(session):
     # get url and discard; somehow it does not work for the first time
     _ = session.get('https://ee-api.appspot.com/assets/upload/geturl?')
     r = session.get('https://ee-api.appspot.com/assets/upload/geturl?')
@@ -242,17 +254,19 @@ def __get_upload_url(session):
     d = ast.literal_eval(r.text)
     return d['url']
 
+
 @retrying.retry(retry_on_exception=retry_if_ee_error, wait_exponential_multiplier=1000, wait_exponential_max=4000, stop_max_attempt_number=3)
-def __upload_file_gee(session, file_path, use_multipart):
+def upload_file_gee(session, file_path, use_multipart):
     with open(file_path, 'rb') as f:
-        upload_url = __get_upload_url(session)
+        upload_url = get_upload_url(session)
 
         if use_multipart:
             form = encoder.MultipartEncoder({
                 "documents": (file_path, f, "application/octet-stream"),
                 "composite": "NONE",
             })
-            headers = {"Prefer": "respond-async", "Content-Type": form.content_type}
+            headers = {"Prefer": "respond-async",
+                       "Content-Type": form.content_type}
             resp = session.post(upload_url, headers=headers, data=form)
         else:
             files = {'file': f}
@@ -262,10 +276,11 @@ def __upload_file_gee(session, file_path, use_multipart):
 
         return gsid
 
+
 @retrying.retry(retry_on_exception=retry_if_ee_error, wait_exponential_multiplier=1000, wait_exponential_max=4000, stop_max_attempt_number=3)
-def __upload_file_gcs(storage_client, bucket_name, image_path):
+def upload_file_gcs(storage_client, bucket_name, image_path):
     bucket = storage_client.get_bucket(bucket_name)
-    blob_name = __get_filename_from_path(path=image_path)
+    blob_name = get_filename_from_path(path=image_path)
     blob = bucket.blob(blob_name)
 
     blob.upload_from_filename(image_path)
@@ -274,15 +289,17 @@ def __upload_file_gcs(storage_client, bucket_name, image_path):
 
     return url
 
-def __periodic_check(current_image, period, tasks, writer):
+
+def periodic_check(current_image, period, tasks, writer):
     if (current_image + 1) % period == 0:
         logging.info('Periodic check')
-        __check_for_failed_tasks_and_report(tasks=tasks, writer=writer)
+        check_for_failed_tasks_and_report(tasks=tasks, writer=writer)
         # Time to check how many tasks are running!
-        __wait_for_tasks_to_complete(waiting_time=10, no_allowed_tasks_running=20)
+        wait_for_tasks_to_complete(
+            waiting_time=10, no_allowed_tasks_running=20)
 
 
-def __check_for_failed_tasks_and_report(tasks, writer):
+def check_for_failed_tasks_and_report(tasks, writer):
     if len(tasks) == 0:
         return
 
@@ -294,41 +311,44 @@ def __check_for_failed_tasks_and_report(tasks, writer):
             filename = tasks[task_id]
             error_message = status['error_message']
             writer.writerow([filename, task_id, error_message])
-            logging.error('Ingestion of image %s has failed with message %s', filename, error_message)
+            logging.error(
+                'Ingestion of image %s has failed with message %s', filename, error_message)
 
     tasks.clear()
 
 
-def __get_filename_from_path(path):
+def get_filename_from_path(path):
     return os.path.splitext(os.path.basename(os.path.normpath(path)))[0]
 
 
-def __get_number_of_running_tasks():
+def get_number_of_running_tasks():
     return len([task for task in ee.data.getTaskList() if task['state'] == 'RUNNING'])
 
 
-def __wait_for_tasks_to_complete(waiting_time, no_allowed_tasks_running):
-    tasks_running = __get_number_of_running_tasks()
+def wait_for_tasks_to_complete(waiting_time, no_allowed_tasks_running):
+    tasks_running = get_number_of_running_tasks()
     while tasks_running > no_allowed_tasks_running:
         logging.info('Number of running tasks is %d. Sleeping for %d s until it goes down to %d',
                      tasks_running, waiting_time, no_allowed_tasks_running)
         time.sleep(waiting_time)
-        tasks_running = __get_number_of_running_tasks()
+        tasks_running = get_number_of_running_tasks()
 
 
-def __collection_exist(path):
+def collection_exist(path):
     return True if ee.data.getInfo(path) else False
 
 
-def __create_image_collection(full_path_to_collection):
-    if __collection_exist(full_path_to_collection):
-        logging.warning("Collection %s already exists", full_path_to_collection)
+def create_image_collection(full_path_to_collection):
+    if collection_exist(full_path_to_collection):
+        logging.warning("Collection %s already exists",
+                        full_path_to_collection)
     else:
-        ee.data.createAsset({'type': ee.data.ASSET_TYPE_IMAGE_COLL}, full_path_to_collection)
+        ee.data.createAsset(
+            {'type': ee.data.ASSET_TYPE_IMAGE_COLL}, full_path_to_collection)
         logging.info('New collection %s created', full_path_to_collection)
 
 
-def __get_asset_names_from_collection(collection_path):
+def get_asset_names_from_collection(collection_path):
     assets_list = ee.data.getList(params={'id': collection_path})
     assets_names = [os.path.basename(asset['id']) for asset in assets_list]
     return assets_names
@@ -346,7 +366,8 @@ class FailedAssetsWriter(object):
             else:
                 self.failed_upload_file = open('failed_upload.csv', 'wb')
             self.failed_upload_writer = csv.writer(self.failed_upload_file)
-            self.failed_upload_writer.writerow(['filename', 'task_id', 'error_msg'])
+            self.failed_upload_writer.writerow(
+                ['filename', 'task_id', 'error_msg'])
             self.initialized = True
         self.failed_upload_writer.writerow(row)
 
